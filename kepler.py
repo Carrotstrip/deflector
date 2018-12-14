@@ -1,4 +1,4 @@
-from visual import *
+from vpython import *
 # from math import *
 import random
 
@@ -92,7 +92,7 @@ def updatePositions(self):
     for body in self.smallBodies+self.largeBodies:
         body.pos += body.velocity*self.dt
 
-scene = display(title = "Asteroid Deflection", width=800, height=800, range=rPEarth*1.5)
+scene = canvas(title = "Asteroid Deflection", width=800, height=800, range=rPEarth*1.5)
 
 # create assets (sun, earth, asteroid, savior)
 sun = sphere(color = color.yellow, radius = rSun*rScale*2)
