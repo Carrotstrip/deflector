@@ -5,6 +5,7 @@ import orbital
 import time
 from poliastro import iod
 from astropy import units as u
+import matplotlib.pyplot as plt
 
 """This code generates an asteroid of random mass and radius and solves the Lambert
 Problem to give it the proper initial velocity to intercept Earth in exactly advanceNotice years.
@@ -53,23 +54,12 @@ it intact somewhere in case anybody wants to see what I mean
 
 """All units are SI base units."""
 
-rScale = 4
-mSun = 1.989e30
-rSun = 695.508e6
-
-muEarth = 3.986e14
-aEarth = 149.6e9
-rPEarth = 147.1e9
-eEarth = 0.0167086
-rEarth = 6371e3
-windowRange = rPEarth*1.5
-
 class Body(sphere):
 
     GRAVC = 6.674e-11
 
     def __init__(self, name, mass, trueRadius, visualRadius):
-        sphere.__init__(self, radius = visualRadius, make_trail = False)
+        sphere.__init__(self, radius = visualRadius, make_trail = True)
         self.name = name
         self.color = color.red
         self.mass = mass
@@ -81,25 +71,32 @@ class Body(sphere):
 
 class Planet(Body):
 
-    rPlanet = 30e8
+    rPlanet = 40e8
 
     def __init__(self, name, mass, trueRadius):
         Body.__init__(self, name, mass, trueRadius, self.rPlanet)
+        # find the nearest a smallBody ever came to this planet
+        self.nearestHit = 0
         
 
 class smallBody(Body):
 
-    rSmallBody = 20e8
+    rSmallBody = 30e8
 
     def __init__(self, name, mass, trueRadius):
         Body.__init__(self, name, mass, trueRadius, self.rSmallBody)
+        # did this already undergo its inelastic collision? can only happen once per smallBody
+        self.didCollide = False
+        # ghosts interact only with gravity
+        self.ghost = False
+        # set this to true to make this smallBody interact with nonImpulsive forces
+        self.nonImpulsiveThrust = 0
         
 
 class SolarSystem:
 
     dt = 100
     t = 0
-    velArr = False
 
     def __init__(self, star):
         self.star = star
@@ -125,44 +122,11 @@ class SolarSystem:
         else:
             self.smallBodies[body.name] = body
 
-    def getBody():
-        pass
+    def getBody(self, bodyName):
+        return ({**(self.smallBodies), **(self.planets)}[bodyName])
+    
 
-    # def generateAsteroid(self, name, planetToHit):
-    #     """Generates an asteroid on a collision course with Earth.
-    #     this requires that the orbits are at the same place at the same time."""
-    #     #mass = raw_input('Asteroid Mass: ')
-    #     #advanceNotice = raw_input('Time to Impact: ')
-    #     mass = 78e9#random.randint(2e14, 6e15)
-    #     advanceNotice = .3#random.randint(5, 10)
-    #     # random radius
-    #     trueRadius = 5000#random.randint(5, 15)
-    #     # velocity and position have to be such that the asteroid collides with Earth
-    #     # Fix collision location?
-    #     # start with a position then we solve the 'given location, find time till it gets there' problem
-    #     # and then give it the proper velocity such that it gets there when earth does
-    #     # take time till impact and find out where earth will be when that happens, given
-    #     # that it starts from periapsis
-    #     # then take the asteroid's starting position and give it the requisite velocity to
-    #     # intersect the collision point at tImpact
-    #     # you know two points in an orbit and the time it takes to get between them, you can then figure out
-    #     # the velocity vector at rStart
-    #     tMinus = yearsToSeconds(advanceNotice)
-    #     # M is how many radians of mean motion till impact
-    #     M = sqrt(self.star.mu/(planetToHit.elements.a)**3)*(tMinus)
-    #     # theta is true anomaly of planet at tImpact
-    #     theta = orbital.utilities.true_anomaly_from_mean(planetToHit.elements.e, M)
-    #     r = (np.linalg.norm(planetToHit.h)**2/self.star.mu)/(1+planetToHit.elements.e*cos(theta))
-    #     rImpact = [r*cos(theta), r*sin(theta), 0]
-    #     # s = sphere(pos=vector(rImpact[0], rImpact[1], rImpact[2]), radius = rSun*6)
-    #     asteroid = smallBody(name, mass, trueRadius)
-    #     r = [rPEarth, rPEarth, 0] #[random.randint(-rPEarth*1.1, rPEarth*1.1), random.randint(rPEarth*1.1, rPEarth*1.3), 0]
-    #     # now what is the v that takes it through rImpact at tImpact?
-    #     # this is lambert's problem!
-    #     (v0, v) = self.lambert(r, rImpact, tMinus)
-    #     self.addBody(asteroid, v0, r)
-
-    def generateInterceptor(self, body, bodyToIntercept, initPosition, tImpact):
+    def generateInterceptor(self, body, bodyToIntercept, initPosition, tImpact, numRevs):
         # mass = body.mass
         # trueRadius = body.radius
         tMinus = yearsToSeconds(tImpact)
@@ -193,7 +157,7 @@ class SolarSystem:
         r = [self.planets['earth'].pos.x, self.planets['earth'].pos.y, self.planets['earth'].pos.z]
         # now what is the v that takes it through rImpact at tImpact?
         # this is lambert's problem
-        (v0, v) = self.lambert(initPosition, rImpact, tMinus)
+        (v0, v) = self.lambert(initPosition, rImpact, tMinus, numRevs)
         self.addBody(body, v0, initPosition)
 
 
@@ -210,15 +174,14 @@ class SolarSystem:
     def inSOI(self, smallBody, planet):
         return mag(smallBody.pos - planet.pos) <= planet.elements.a*(planet.mass/self.star.mass)**(2.0/5)
 
-    def fireLasers(self):
-        laserThrust = 10
-        laserAcc = laserThrust/self.smallBodies['killer'].mass
-        laserDirVec = (self.smallBodies['killer'].pos - self.planets['earth'].pos)
-        laserAccVec = laserAcc*laserDirVec/mag(laserDirVec)
-        # self.laserBeam.pos = self.planets['earth'].pos
-        # self.laserBeam.axis = laserDirVec
-        # self.laserBeam.shaftwidth = 4e8
-        return laserAccVec
+    def nonImpulsive(self, body, dirVec):
+        """Simulates any non impulsive acceleration."""
+        # ghosts don't feel this force
+        if body.nonImpulsiveThrust <= 0 or body.ghost:
+            return vector(0, 0, 0)
+        acc = body.nonImpulsiveThrust/body.mass
+        accVec = acc*dirVec/mag(dirVec)
+        return accVec
 
     def getAccelerations(self):
         """Get accelerations for all the objects. Use sphere of influence
@@ -230,26 +193,28 @@ class SolarSystem:
         The star is motionless in our frame."""
         for body2 in self.smallBodies.values():
             # print(self.fireLasers())
-            body2.acceleration = -(body2.pos-self.star.pos)*self.star.mu/(mag(body2.pos-self.star.pos)**3)#+self.fireLasers()
-            for body1 in self.planets.values():
-                if self.inSOI(body2, body1):
-                    self.star.color = color.red
-                    # TODO light up the planet that has a smallBody in its SOI
-                    #body2.acceleration = -(body2.pos-body1.pos)*body1.mu/(mag(body2.pos-body1.pos)**3)
-                else:
-                    self.star.color = color.yellow
+            body2.acceleration = -(body2.pos-self.star.pos)*self.star.mu/(mag(body2.pos-self.star.pos)**3)+self.nonImpulsive(body2, (body2.pos-self.planets['earth'].pos))
+            # for body1 in self.planets.values():
+            #     if self.inSOI(body2, body1):
+            #         self.star.color = color.red
+            #         # TODO light up the planet that has a smallBody in its SOI
+            #         #body2.acceleration = -(body2.pos-body1.pos)*body1.mu/(mag(body2.pos-body1.pos)**3)
+            #     else:
+            #         self.star.color = color.yellow
         for body in self.planets.values():
             body.acceleration = -(body.pos-self.star.pos)*self.star.mu/(mag(body.pos-self.star.pos)**3)
 
     def updateVelocities(self):
         """Update velocities for all celestial bodies in the SolarSystem."""
-        if doCollide(self.smallBodies['killer'], self.smallBodies['savior']):
-            # print('boom')
-            if not self.velArr:
-                self.velArr = True
-                inelasticCollision(self.smallBodies['killer'], self.smallBodies['savior'])
+        if 'savior' in self.smallBodies:
+            if doCollide(self.smallBodies['killer'], self.smallBodies['savior']):
+                if not self.smallBodies['savior'].didCollide:
+                    # print('boom')
+                    self.smallBodies['savior'].didCollide = True
+                    # inelasticCollision simulates an inelastic collision between these bodies, 
+                    # updating the velocity and sticking them together
+                    inelasticCollision(self.smallBodies['killer'], self.smallBodies['savior'])
         for body in list(self.smallBodies.values())+list(self.planets.values()):
-            # print(body.name, body.velocity)
             body.velocity += body.acceleration*self.dt
 
     def updatePositions(self):
@@ -257,18 +222,19 @@ class SolarSystem:
         for body in list(self.smallBodies.values())+list(self.planets.values()):
             body.pos += body.velocity*self.dt
 
-
-
 def doCollide(obj1, obj2):
     """Determine if two objects have collided."""
     # both objects have to be spheres
-    return mag(obj1.pos - obj2.pos) <= (obj1.trueRadius+obj2.trueRadius)
+    return obj1.trueRadius > 0 and obj2.trueRadius > 0 and mag(obj1.pos - obj2.pos) <= (obj1.trueRadius+obj2.trueRadius)
 
 def inelasticCollision(obj1, obj2):
     """obj 1 is larger."""
+    # ghosts don't feel this force
+    if obj1.ghost or obj2.ghost:
+        return
     vec = (obj1.velocity - obj2.velocity)
     obj1.velocity = (obj2.mass*obj2.velocity+obj1.mass*obj1.velocity)/(obj2.mass+obj1.mass)
-    obj2.velocity = obj1.velocity
+    obj2.visible = False
 
 def yearsToSeconds(years):
     return years*525600*60
@@ -277,39 +243,82 @@ def vecToList(v):
     return [v.x, v.y, v.z]
 
 
-scene = canvas(title = "Asteroid Deflection", width=800, height=640, range=windowRange)
 
+######## DEFINE RUN PARAMETERS
+
+# body initial conditions
+# sun
+mSun = 1.989e30
+rSun = 695.508e6
+
+# earth
+mEarth = 5.972e24
+aEarth = 149.6e9
+eEarth = 0.0167086
+rPEarth = aEarth*(1-eEarth)
+rEarth = 6371e3
+
+# apophis
+mApophis = 27e9
+rApophis = 2e2
+
+# bennu
+
+scene = canvas(title = "Asteroid Deflection", width=800, height=640, range=rPEarth*1.5)
+
+# make SolarSystem
 sun = Body('sun', mSun, rSun, rSun*9)
 sun.color = color.yellow
 home = SolarSystem(sun)
-earth = Planet('earth', 5.972e24, 6371e3)
+# make earth (body to be hit)
+earth = Planet('earth', mEarth, rEarth)
 earth.color = color.blue
 home.addBody(earth, (0, sqrt(home.star.mu/rPEarth), 0), (rPEarth, 0, 0))
-killer = smallBody('killer', 488e9, 2e8)
+# make smallBodies
+# smallBody
+# def __init__(self, name, mass, trueRadius)
+killer = smallBody('killer', mApophis, rApophis)
 killer.color = color.red
+killer.nonImpulsiveThrust = 0
+ghost = smallBody('ghost', 488e9, rApophis)
+ghost.color = color.white
+ghost.ghost = True
 # def generateInterceptor(self, body, bodyToIntercept, initPosition, tImpact)
-home.generateInterceptor(killer, earth, [earth.pos.x, earth.pos.x, 0], .4)
-savior = smallBody('savior', 1e14, 1e7)
+home.generateInterceptor(killer, earth, [-earth.pos.x*3, earth.pos.x*3, 0], 1.1, 0)
+# home.generateInterceptor(ghost, earth, [earth.pos.x*1.1, -earth.pos.x/3, 0], .3, 0)
+savior = smallBody('savior', 1e5, 1e8)
 savior.color = color.green
-home.generateInterceptor(savior, home.smallBodies['killer'], vecToList(earth.pos), .2)
+# home.generateInterceptor(savior, killer, vecToList(earth.pos), .8, 0)
+# print(mag(home.getBody('savior').velocity-home.getBody('earth').velocity)-8000)
 
-# scene.bind('keydown', home.generateAsteroid)
-years = 0
-while not doCollide(home.planets['earth'], home.smallBodies['killer']) and years < 20:
-    rate(5000000)  
+######## END DEFINE RUN PARAMETERS
+
+
+
+
+# main loop
+tvec = []
+killerFromEarth = []
+# a more powerful program would check every planet against every small body by making a member
+# doCollide, but this is straining enough as it is
+home.dt = 40
+while not doCollide(home.getBody('earth'), home.getBody('killer')) and home.t < yearsToSeconds(4):
+    rate(1000000)  
     home.getAccelerations()
     home.updateVelocities()
     home.updatePositions()
+    killerFromEarth.append(mag(home.getBody('killer').pos - home.getBody('earth').pos) - (home.getBody('killer').trueRadius + home.getBody('earth').trueRadius))
+    tvec.append(home.t/(525600*60))
     home.t += home.dt
 
     # years = float(home.t)/float(525600*60)
-if not years >= 20:
-    L = label(pos=vector(rPEarth*1.4, rPEarth*1.4, 0),
-        text=('Humanity destroyed'), space=30,
+if not home.t >= yearsToSeconds(3):
+    L = label(pos=vector(rPEarth*1.2, rPEarth*1.2, 0),
+        text=('Stephen Hawking was right'), space=30,
         height=16,
         font='sans')
     debris = []
-    body = home.planets['earth']
+    body = home.getBody('earth')
     body.visible = False
     for i in range(20):
         debris.append(sphere(pos=body.pos, radius = body.radius/3))
@@ -323,7 +332,7 @@ if not years >= 20:
         vy = random.randint(vyS[0], vyS[1])
         vz = 0
         debris[-1].velocity = vector(vx, vy, vz)
-        debris[-1].color = color.red
+        debris[-1].color = vector(random.random(), random.random(), random.random())
 
     t = 0
     dt = .001
@@ -332,12 +341,30 @@ if not years >= 20:
         for deb in debris:
             deb.pos += deb.velocity*home.dt
         t += dt
+plt.plot(tvec, killerFromEarth, )
+plt.plot(tvec, [rEarth]*len(tvec))
+plt.yscale('log')
+plt.title('Asteroid Distance')
+plt.xlabel('time (years)')
+plt.ylabel('distance from asteroid to center of earth (m)')
+plt.show()
 
 """Now what do we want to know? What useful data can we extract from a run of this sim?
 
 How much did we nudge the asteroid off course at its closest point to Earth?
 
-Can we show a 'ghost' of what would've happened had we not intervened?
+Can we show a 'ghost' of what would've happened had we not intervened? DONE
+
+Graph for any given initial conditions of how much impulse we need to impart to the asteroid to avoid collision (for kinetic impactor)
+create conditions, solve lambert, iterate over various impulses in the vf direction, solve tof, and get distance away from center of earth
+
+Similar graph for non impulsive is really hard no thank you
+
+start asteroid in some position
+
+generate pork chop plots for departure dates
+
+choose a good one (high vf, low energy) and launch then
 
 
 """
