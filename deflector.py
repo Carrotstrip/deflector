@@ -90,12 +90,14 @@ class smallBody(Body):
         # ghosts interact only with gravity
         self.ghost = False
         # set this to true to make this smallBody interact with nonImpulsive forces
-        self.nonImpulsiveThrust = 0
+        self.nonImpulsiveThrust = vector(0, 0, 0)
+        self.hasSail = False
+        self.sailArea = 0
         
 
 class SolarSystem:
 
-    dt = 100
+    dt = 0
     t = 0
 
     def __init__(self, star):
@@ -124,21 +126,30 @@ class SolarSystem:
 
     def getBody(self, bodyName):
         return ({**(self.smallBodies), **(self.planets)}[bodyName])
+
+    def makeGhost(self, body):
+        ghost = smallBody(body.name + 'Ghost', 0, 0)
+        ghost.color = color.white
+        ghost.ghost = True
+        v = [body.velocity.x, body.velocity.y, body.velocity.z]
+        r = [body.pos.x, body.pos.y, body.pos.z]
+        self.addBody(ghost, v, r)
     
 
-    def generateInterceptor(self, body, bodyToIntercept, initPosition, tImpact, numRevs):
+    def generateInterceptor(self, body, bodyToIntercept, initPosition, tImpact, numRevs, tLaunch = 0):
         # mass = body.mass
         # trueRadius = body.radius
         tMinus = yearsToSeconds(tImpact)
         # TODO this doesn't work since the asteroid doesn't necessarily start from its periapsis
         # i need to add the mean anomaly of the asteroid at t = 0 (sim start), how do i get this
         # use the f
-        true = bodyToIntercept.elements.f
-        M0 = orbital.mean_anomaly_from_true(bodyToIntercept.elements.e, true)
+        npPos = np.array([bodyToIntercept.pos.x, bodyToIntercept.pos.y, bodyToIntercept.pos.z], dtype=np.float32)
+        npVel = np.array([bodyToIntercept.velocity.x, bodyToIntercept.velocity.y, bodyToIntercept.velocity.z], dtype=np.float32)
+        f = orbital.utilities.elements_from_state_vector(npPos, npVel, self.star.mu).f
+        M0 = orbital.mean_anomaly_from_true(bodyToIntercept.elements.e, f)
         M = sqrt(self.star.mu/(bodyToIntercept.elements.a)**3)*(tMinus) + M0
         # theta is true anomaly of bodyToIntercept at tImpact
         theta = orbital.utilities.true_anomaly_from_mean(bodyToIntercept.elements.e, M)
-        # print('theta', theta)
         r = (np.linalg.norm(bodyToIntercept.h)**2/self.star.mu)/(1+bodyToIntercept.elements.e*cos(theta))
         # now rotate that into our periapsis on right frame
         position = [bodyToIntercept.pos.x, bodyToIntercept.pos.y, bodyToIntercept.pos.z]
@@ -152,9 +163,13 @@ class SolarSystem:
             theta -= acos(np.dot(ev, right)/(np.linalg.norm(ev)*np.linalg.norm(right)))
         else:
             theta += acos(np.dot(ev, right)/(np.linalg.norm(ev)*np.linalg.norm(right)))
+        # i = bodyToIntercept.elements.i
+        # raan = bodyToIntercept.elements.raan
+        # arg_pe = bodyToIntercept.elements.arg_pe
+        # U, V, W = orbital.uvw_from_elements(i, raan, arg_pe, f)
         rImpact = [r*cos(theta), r*sin(theta), 0]
         # s = sphere(pos=vector(rImpact[0], rImpact[1], rImpact[2]), radius = rSun*6)
-        r = [self.planets['earth'].pos.x, self.planets['earth'].pos.y, self.planets['earth'].pos.z]
+        # r = [self.planets['earth'].pos.x, self.planets['earth'].pos.y, self.planets['earth'].pos.z]
         # now what is the v that takes it through rImpact at tImpact?
         # this is lambert's problem
         (v0, v) = self.lambert(initPosition, rImpact, tMinus, numRevs)
@@ -171,17 +186,25 @@ class SolarSystem:
         v =  [1000*v.value[0], 1000*v.value[1], 1000*v.value[2]]
         return v0, v
 
+
     def inSOI(self, smallBody, planet):
         return mag(smallBody.pos - planet.pos) <= planet.elements.a*(planet.mass/self.star.mass)**(2.0/5)
 
-    def nonImpulsive(self, body, dirVec):
+
+    def nonImpulsiveAcc(self, body):
         """Simulates any non impulsive acceleration."""
         # ghosts don't feel this force
-        if body.nonImpulsiveThrust <= 0 or body.ghost:
+        if mag(body.nonImpulsiveThrust) <= 0 or body.ghost:
             return vector(0, 0, 0)
         acc = body.nonImpulsiveThrust/body.mass
-        accVec = acc*dirVec/mag(dirVec)
-        return accVec
+        return acc
+
+    def solarSail(self, body, sailArea):
+        intensity = self.star.power/(4*np.pi*mag(body.pos-self.star.pos)**2)
+        # 3e8 is lightspeed
+        pressure = 2*intensity/3e8 
+        force = pressure*sailArea*(body.pos-self.star.pos)/mag(body.pos-self.star.pos)
+        return force
 
     def getAccelerations(self):
         """Get accelerations for all the objects. Use sphere of influence
@@ -193,7 +216,9 @@ class SolarSystem:
         The star is motionless in our frame."""
         for body2 in self.smallBodies.values():
             # print(self.fireLasers())
-            body2.acceleration = -(body2.pos-self.star.pos)*self.star.mu/(mag(body2.pos-self.star.pos)**3)+self.nonImpulsive(body2, (body2.pos-self.planets['earth'].pos))
+            if body2.hasSail:
+                body2.nonImpulsiveThrust = self.solarSail(body2, body2.sailArea)
+            body2.acceleration = -(body2.pos-self.star.pos)*self.star.mu/(mag(body2.pos-self.star.pos)**3)+self.nonImpulsiveAcc(body2)
             # for body1 in self.planets.values():
             #     if self.inSOI(body2, body1):
             #         self.star.color = color.red
@@ -264,11 +289,13 @@ rApophis = 2e2
 
 # bennu
 
-scene = canvas(title = "Asteroid Deflection", width=800, height=640, range=rPEarth*1.5)
+scene = canvas(title = "Asteroid Deflection", width=1200, height=640, range=rPEarth*1.5)
 
 # make SolarSystem
 sun = Body('sun', mSun, rSun, rSun*9)
 sun.color = color.yellow
+# TODO wrong number
+sun.power = 3.8e26
 home = SolarSystem(sun)
 # make earth (body to be hit)
 earth = Planet('earth', mEarth, rEarth)
@@ -279,19 +306,18 @@ home.addBody(earth, (0, sqrt(home.star.mu/rPEarth), 0), (rPEarth, 0, 0))
 # def __init__(self, name, mass, trueRadius)
 killer = smallBody('killer', mApophis, rApophis)
 killer.color = color.red
-killer.nonImpulsiveThrust = 0
-ghost = smallBody('ghost', 488e9, rApophis)
-ghost.color = color.white
-ghost.ghost = True
+killer.hasSail = True
+killer.sailArea = 30000000000
 # def generateInterceptor(self, body, bodyToIntercept, initPosition, tImpact)
-home.generateInterceptor(killer, earth, [-earth.pos.x*3, earth.pos.x*3, 0], 1.1, 0)
-# home.generateInterceptor(ghost, earth, [earth.pos.x*1.1, -earth.pos.x/3, 0], .3, 0)
-savior = smallBody('savior', 1e5, 1e8)
+home.generateInterceptor(killer, earth, [-earth.pos.x, earth.pos.x*3*0, 0], 1.2, 0)
+home.makeGhost(killer)
+# home.generateInterceptor(ghost, earth, [-earth.pos.x, earth.pos.x*3*0, 0], .3, 0)
+savior = smallBody('savior', 1e4*0, 1e8)
 savior.color = color.green
-# home.generateInterceptor(savior, killer, vecToList(earth.pos), .8, 0)
+tLaunchSavior = yearsToSeconds(.2)
 # print(mag(home.getBody('savior').velocity-home.getBody('earth').velocity)-8000)
 
-######## END DEFINE RUN PARAMETERS
+######## END DEFINE RUN PARAMETERS  
 
 
 
@@ -299,14 +325,21 @@ savior.color = color.green
 # main loop
 tvec = []
 killerFromEarth = []
+ghostFromKiller = []
 # a more powerful program would check every planet against every small body by making a member
 # doCollide, but this is straining enough as it is
-home.dt = 40
-while not doCollide(home.getBody('earth'), home.getBody('killer')) and home.t < yearsToSeconds(4):
-    rate(1000000)  
+home.dt = 100
+saviorLaunched = False
+while not doCollide(home.getBody('earth'), home.getBody('killer')) and home.t < yearsToSeconds(1.5):
+    rate(100000)
+    if not saviorLaunched and home.t >= tLaunchSavior:
+        home.generateInterceptor(savior, killer, vecToList(earth.pos), .3, 0)
+        saviorLaunched = True
+    
     home.getAccelerations()
     home.updateVelocities()
     home.updatePositions()
+    ghostFromKiller.append(mag(home.getBody('killer').pos - home.getBody('killerGhost').pos) - (home.getBody('killer').trueRadius + home.getBody('killerGhost').trueRadius))
     killerFromEarth.append(mag(home.getBody('killer').pos - home.getBody('earth').pos) - (home.getBody('killer').trueRadius + home.getBody('earth').trueRadius))
     tvec.append(home.t/(525600*60))
     home.t += home.dt
@@ -341,12 +374,22 @@ if not home.t >= yearsToSeconds(3):
         for deb in debris:
             deb.pos += deb.velocity*home.dt
         t += dt
-plt.plot(tvec, killerFromEarth, )
-plt.plot(tvec, [rEarth]*len(tvec))
-plt.yscale('log')
+else:
+    L = label(pos=vector(rPEarth*1.2, rPEarth*1.2, 0),
+        text=('Earth survives'), space=30,
+        height=16,
+        font='sans')
+# plt.plot(tvec, killerFromEarth, )
+# plt.plot(tvec, [rEarth]*len(tvec))
+# plt.yscale('log')
+# plt.title('Asteroid Distance')
+# plt.xlabel('time (years)')
+# plt.ylabel('distance from asteroid to center of earth (m)')
+plt.plot(tvec, ghostFromKiller)
+# plt.yscale('log')
 plt.title('Asteroid Distance')
 plt.xlabel('time (years)')
-plt.ylabel('distance from asteroid to center of earth (m)')
+plt.ylabel('distance from asteroid to unperturbed ghost (m)')
 plt.show()
 
 """Now what do we want to know? What useful data can we extract from a run of this sim?
