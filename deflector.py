@@ -219,13 +219,13 @@ class SolarSystem:
             if body2.hasSail:
                 body2.nonImpulsiveThrust = self.solarSail(body2, body2.sailArea)
             body2.acceleration = -(body2.pos-self.star.pos)*self.star.mu/(mag(body2.pos-self.star.pos)**3)+self.nonImpulsiveAcc(body2)
-            # for body1 in self.planets.values():
-            #     if self.inSOI(body2, body1):
-            #         self.star.color = color.red
-            #         # TODO light up the planet that has a smallBody in its SOI
-            #         #body2.acceleration = -(body2.pos-body1.pos)*body1.mu/(mag(body2.pos-body1.pos)**3)
-            #     else:
-            #         self.star.color = color.yellow
+            for body1 in self.planets.values():
+                if self.inSOI(body2, body1):
+                    self.star.color = color.red
+                    # TODO light up the planet that has a smallBody in its SOI
+                    body2.acceleration = -(body2.pos-body1.pos)*body1.mu/(mag(body2.pos-body1.pos)**3)
+                else:
+                    self.star.color = color.yellow
         for body in self.planets.values():
             body.acceleration = -(body.pos-self.star.pos)*self.star.mu/(mag(body.pos-self.star.pos)**3)
 
@@ -269,7 +269,8 @@ def vecToList(v):
 
 
 
-######## DEFINE RUN PARAMETERS
+
+######## DEFINE CONSTANT
 
 # body initial conditions
 # sun
@@ -288,13 +289,20 @@ mApophis = 27e9
 rApophis = 2e2
 
 # bennu
+mBennu = 6e10
+rBennu = 2.62e2
+
+######## END DEFINE CONSTANT
+
 
 scene = canvas(title = "Asteroid Deflection", width=1200, height=640, range=rPEarth*1.5)
+
+
+######## DEFINE RUN PARAMETERS
 
 # make SolarSystem
 sun = Body('sun', mSun, rSun, rSun*9)
 sun.color = color.yellow
-# TODO wrong number
 sun.power = 3.8e26
 home = SolarSystem(sun)
 # make earth (body to be hit)
@@ -307,45 +315,49 @@ home.addBody(earth, (0, sqrt(home.star.mu/rPEarth), 0), (rPEarth, 0, 0))
 killer = smallBody('killer', mApophis, rApophis)
 killer.color = color.red
 killer.hasSail = True
-killer.sailArea = 30000000000
 # def generateInterceptor(self, body, bodyToIntercept, initPosition, tImpact)
-home.generateInterceptor(killer, earth, [-earth.pos.x, earth.pos.x*3*0, 0], 1.2, 0)
+home.generateInterceptor(killer, earth, [-earth.pos.x, earth.pos.x*3*0, 0], 1, 0)
 home.makeGhost(killer)
 # home.generateInterceptor(ghost, earth, [-earth.pos.x, earth.pos.x*3*0, 0], .3, 0)
-savior = smallBody('savior', 1e4*0, 1e8)
+savior = smallBody('savior', 1e6, 1e9)
 savior.color = color.green
 tLaunchSavior = yearsToSeconds(.2)
+tofSavior = .5
+tHitSavior = tLaunchSavior + tofSavior
 # print(mag(home.getBody('savior').velocity-home.getBody('earth').velocity)-8000)
 
 ######## END DEFINE RUN PARAMETERS  
 
 
-
-
 # main loop
 tvec = []
-killerFromEarth = []
+killerFromEarth = []    
 ghostFromKiller = []
+ghostFromEarth = []
 # a more powerful program would check every planet against every small body by making a member
 # doCollide, but this is straining enough as it is
-home.dt = 100
+home.dt = 50
 saviorLaunched = False
-while not doCollide(home.getBody('earth'), home.getBody('killer')) and home.t < yearsToSeconds(1.5):
-    rate(100000)
+# not doCollide(home.getBody('earth'), home.getBody('killer')) and
+while home.t < yearsToSeconds(17.1):
+    rate(1000000)
     if not saviorLaunched and home.t >= tLaunchSavior:
-        home.generateInterceptor(savior, killer, vecToList(earth.pos), .3, 0)
+        home.generateInterceptor(savior, killer, [earth.pos.x + earth.elements.a*(earth.mass/home.star.mass)**(2.0/5), earth.pos.y, earth.pos.z], tofSavior, 0)
         saviorLaunched = True
+    # if home.t > tHitSavior:
+    #     home.getBody('killer').sailArea = 1000000
     
     home.getAccelerations()
     home.updateVelocities()
     home.updatePositions()
-    ghostFromKiller.append(mag(home.getBody('killer').pos - home.getBody('killerGhost').pos) - (home.getBody('killer').trueRadius + home.getBody('killerGhost').trueRadius))
-    killerFromEarth.append(mag(home.getBody('killer').pos - home.getBody('earth').pos) - (home.getBody('killer').trueRadius + home.getBody('earth').trueRadius))
+    ghostFromKiller.append(mag(home.getBody('killer').pos - home.getBody('killerGhost').pos))
+    killerFromEarth.append(mag(home.getBody('killer').pos - home.getBody('earth').pos) - (home.getBody('killer').trueRadius))
+    ghostFromEarth.append(mag(home.getBody('killerGhost').pos - home.getBody('earth').pos) - (home.getBody('killerGhost').trueRadius))
     tvec.append(home.t/(525600*60))
     home.t += home.dt
 
     # years = float(home.t)/float(525600*60)
-if not home.t >= yearsToSeconds(3):
+if not home.t >= yearsToSeconds(17.1):
     L = label(pos=vector(rPEarth*1.2, rPEarth*1.2, 0),
         text=('Stephen Hawking was right'), space=30,
         height=16,
@@ -379,19 +391,23 @@ else:
         text=('Earth survives'), space=30,
         height=16,
         font='sans')
-# plt.plot(tvec, killerFromEarth, )
-# plt.plot(tvec, [rEarth]*len(tvec))
-# plt.yscale('log')
-# plt.title('Asteroid Distance')
-# plt.xlabel('time (years)')
-# plt.ylabel('distance from asteroid to center of earth (m)')
-plt.plot(tvec, ghostFromKiller)
-# plt.yscale('log')
-plt.title('Asteroid Distance')
+
+
+######## MAKE PLOTS
+# plt.plot(tvec, killerFromEarth, label = 'asteroid from center of earth')
+plt.plot(tvec, [rEarth]*len(tvec), label = 'Radius of Earth')
+plt.plot(tvec, ghostFromKiller, label = 'perturbed asteroid from non-perturbed')
+# plt.plot(tvec, ghostFromEarth, label = 'non-perturbed asteroid from center of Earth')
+plt.title('Distances')
 plt.xlabel('time (years)')
-plt.ylabel('distance from asteroid to unperturbed ghost (m)')
+plt.ylabel('distance from center of Earth (m)')
+plt.yscale('log')
+plt.xlabel('time (years)')
+plt.ylabel('distance (m)')
+plt.legend()
 plt.show()
 
+######## END MAKE PLOTS
 """Now what do we want to know? What useful data can we extract from a run of this sim?
 
 How much did we nudge the asteroid off course at its closest point to Earth?
